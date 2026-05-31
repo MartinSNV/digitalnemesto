@@ -3,20 +3,28 @@
 Scraper pre digitalnemesto.sk – Spišská Nová Ves a jej organizácie
 Zberá všetky dostupné údaje o dokumentoch (zmluvy, faktúry, objednávky).
 
+URL štruktúra portálu (SPA, hash routing):
+  /#/zverejnovanie/{city-slug}/{org-id}/{doc-type}/{rok}
+
+Príklady:
+  /#/zverejnovanie/spisska-nova-ves/spisskanovaves/faktury-dodavatelske/2025
+  /#/zverejnovanie/spisska-nova-ves/spisskanovaves/zmluvy/2025
+
 Pouzitie:
-  python digitalnemesto_scraper.py                          # SNV - všetky org, všetky typy
-  python digitalnemesto_scraper.py --org mesto              # iba mestský úrad
-  python digitalnemesto_scraper.py --keyword stavba         # filter kľúčovým slovom
-  python digitalnemesto_scraper.py --typ zmluvy             # iba zmluvy
-  python digitalnemesto_scraper.py --format json            # JSON výstup
-  python digitalnemesto_scraper.py --zoznam-org             # vypíše dostupné organizácie
+  python digitalnemesto_scraper.py                           # SNV - všetky org, typy, roky
+  python digitalnemesto_scraper.py --org mesto               # iba Mesto SNV
+  python digitalnemesto_scraper.py --keyword stavba          # filter kľúčovým slovom
+  python digitalnemesto_scraper.py --typ zmluvy              # iba zmluvy
+  python digitalnemesto_scraper.py --rok 2024                # iba rok 2024
+  python digitalnemesto_scraper.py --format json             # JSON výstup
+  python digitalnemesto_scraper.py --zoznam-org              # vypíše organizácie SNV
 """
 
 import argparse
 import json
 import sys
-import unicodedata
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Any
 
 try:
@@ -28,260 +36,171 @@ except ImportError:
 
 
 BASE_URL = "https://www.digitalnemesto.sk"
+CURRENT_YEAR = datetime.now().year
 
-# Všetky organizácie Spišskej Novej Vsi na portáli digitalnemesto.sk
-# Kľúč = slug používaný v URL, Hodnota = zobrazovaný názov
-SNV_ORGANIZACIE: dict[str, str] = {
-    "spiska-nova-ves": "Mesto Spišská Nová Ves",
-    "spiska-nova-ves-mestsky-urad": "Mestský úrad Spišská Nová Ves",
-    "spiska-nova-ves-ts": "Technické služby Spišská Nová Ves",
-    "spiska-nova-ves-mks": "Mestské kultúrne stredisko SNV",
-    "spiska-nova-ves-mkc": "Mestské kultúrne centrum SNV",
-    "spiska-nova-ves-kniznica": "Mestská knižnica Spišská Nová Ves",
-    "spiska-nova-ves-bh": "Bytové hospodárstvo SNV",
-    "spiska-nova-ves-skola": "ZŠ Spišská Nová Ves",
-    "spiska-nova-ves-ms": "MŠ Spišská Nová Ves",
-    "spiska-nova-ves-szm": "Správa zdravotníckych zariadení",
-    "spiska-nova-ves-sport": "Športové zariadenia SNV",
-    "spiska-nova-ves-socialne": "Sociálne centrum SNV",
+# Typy dokumentov – slug v URL portálu → interný kód
+DOC_TYPES: dict[str, str] = {
+    "zmluvy": "zmluvy",
+    "faktury-dodavatelske": "faktury",
+    "faktury-odberatelske": "faktury-odberatelske",
+    "objednavky": "objednavky",
 }
+
+# Organizácie Spišskej Novej Vsi
+# Kľúč = org-id v URL portálu, Hodnota = zobrazovaný názov
+# Format URL: /#/zverejnovanie/spisska-nova-ves/{org-id}/{typ}/{rok}
+SNV_ORGANIZACIE: dict[str, str] = {
+    "spisskanovaves":              "Mesto Spišská Nová Ves",
+    "muspiskanovaves":             "Mestský úrad SNV",
+    "tsspiskanovaves":             "Technické služby SNV",
+    "mksspiskanovaves":            "Mestské kultúrne stredisko SNV",
+    "mksspn":                      "Mestské kultúrne centrum SNV",
+    "kniznicaspiskanovaves":       "Mestská knižnica SNV",
+    "bhspiskanovaves":             "Bytové hospodárstvo SNV",
+    "socialnecentrumspn":          "Sociálne centrum SNV",
+}
+
+SNV_CITY_SLUG = "spisska-nova-ves"
 
 # Skratky pre --org parameter
 ORG_SKRATKY: dict[str, str] = {
-    "mesto": "spiska-nova-ves",
-    "mu": "spiska-nova-ves-mestsky-urad",
-    "ts": "spiska-nova-ves-ts",
-    "mks": "spiska-nova-ves-mks",
-    "mkc": "spiska-nova-ves-mkc",
-    "kniznica": "spiska-nova-ves-kniznica",
-    "bh": "spiska-nova-ves-bh",
+    "mesto":    "spisskanovaves",
+    "mu":       "muspiskanovaves",
+    "ts":       "tsspiskanovaves",
+    "mks":      "mksspiskanovaves",
+    "mkc":      "mksspn",
+    "kniznica": "kniznicaspiskanovaves",
+    "bh":       "bhspiskanovaves",
+    "socialne": "socialnecentrumspn",
 }
 
 
 @dataclass
 class Dokument:
     # Organizácia / zdroj
-    organizacia: str = ""          # názov organizácie (SNV entita)
-    org_slug: str = ""             # slug organizácie
+    organizacia: str = ""          # názov organizácie
+    org_id: str = ""               # org-id v URL portálu
+    rok: str = ""                  # rok dokumentu
 
-    # Základné identifikačné údaje
-    typ: str = ""                  # zmluva / faktura / objednavka
+    # Identifikácia
+    typ: str = ""                  # zmluvy / faktury / faktury-odberatelske / objednavky
     cislo: str = ""                # číslo dokumentu
     id_dokumentu: str = ""         # interné ID na portáli
 
-    # Predmet / popis
-    nazov: str = ""                # predmet / názov zmluvy
+    # Predmet
+    nazov: str = ""                # predmet / názov
     popis: str = ""                # rozšírený popis
 
-    # Zmluvná strana – dodávateľ / zhotoviteľ
+    # Dodávateľ / zhotoviteľ
     dodavatel: str = ""            # názov firmy / osoby
-    ico: str = ""                  # IČO dodávateľa
-    dic: str = ""                  # DIČ dodávateľa
-    adresa_dodavatela: str = ""    # adresa dodávateľa
+    ico: str = ""                  # IČO
+    dic: str = ""                  # DIČ
+    adresa_dodavatela: str = ""    # adresa
 
-    # Objednávateľ / odberateľ
-    objednavatel: str = ""         # mestský úrad / organizácia
+    # Objednávateľ
+    objednavatel: str = ""
     oddelenie: str = ""            # oddelenie / referát
 
-    # Finančné údaje
-    suma: str = ""                 # celková hodnota vrátane DPH
-    suma_bez_dph: str = ""         # hodnota bez DPH
+    # Financie
+    suma: str = ""                 # celková suma vrátane DPH
+    suma_bez_dph: str = ""         # suma bez DPH
     mena: str = ""                 # mena (EUR)
 
     # Dátumy
-    datum: str = ""                # hlavný dátum (podpis / vystavenie)
+    datum: str = ""                # dátum podpisu / vystavenia
     datum_ucinnosti: str = ""      # dátum účinnosti / splatnosti
-    datum_zverejnenia: str = ""    # dátum zverejnenia na portáli
+    datum_zverejnenia: str = ""    # dátum zverejnenia
     datum_platnosti_do: str = ""   # platnosť do
 
     # Kategorizácia
-    kategoria: str = ""            # kategória dokumentu
-    podkategoria: str = ""         # podkategória
-    rok: str = ""                  # rok dokumentu
-    stav: str = ""                 # stav (aktívna, ukončená, ...)
+    kategoria: str = ""
+    podkategoria: str = ""
+    stav: str = ""
 
     # Súbory a linky
-    url: str = ""                  # URL detail stránky
-    subory: list[str] = field(default_factory=list)  # linky na PDF/prílohy
+    url: str = ""
+    subory: list[str] = field(default_factory=list)
 
-    # Ďalšie metadáta
-    poznamka: str = ""             # poznámka / doplňujúce info
-    raw: dict[str, Any] = field(default_factory=dict)  # surové dáta z API
+    # Doplnky
+    poznamka: str = ""
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# URL builder
+# ---------------------------------------------------------------------------
+
+def build_url(org_id: str, doc_type_slug: str, rok: int) -> str:
+    """Zostaví hash-based URL pre daný typ a rok."""
+    return f"{BASE_URL}/#/zverejnovanie/{SNV_CITY_SLUG}/{org_id}/{doc_type_slug}/{rok}"
+
+
+def get_doc_type_slugs(typ: str) -> list[str]:
+    """Vráti zoznam URL slugov pre zvolený typ dokumentov."""
+    if typ == "all":
+        return list(DOC_TYPES.keys())
+    if typ == "faktury":
+        return ["faktury-dodavatelske", "faktury-odberatelske"]
+    if typ in DOC_TYPES:
+        return [typ]
+    return list(DOC_TYPES.keys())
+
+
+def get_years(rok_arg: int | None) -> list[int]:
+    """Vráti zoznam rokov na scrapovanie."""
+    if rok_arg:
+        return [rok_arg]
+    # Predvolene posledné 3 roky + aktuálny
+    return list(range(CURRENT_YEAR - 2, CURRENT_YEAR + 1))
 
 
 # ---------------------------------------------------------------------------
 # Hlavná funkcia
 # ---------------------------------------------------------------------------
 
-def scrape_organizacia(
-    org_slug: str,
-    org_nazov: str,
-    keyword: str = "",
-    doc_type: str = "all",
-    max_pages: int = 10,
-    headless: bool = True,
-    scrape_details: bool = True,
-) -> list[Dokument]:
-    """Scrape všetky dokumenty jednej organizácie."""
-    docs: list[Dokument] = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1366, "height": 768},
-            locale="sk-SK",
-            extra_http_headers={
-                "Accept-Language": "sk-SK,sk;q=0.9,en;q=0.8",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            },
-        )
-
-        api_responses: list[dict] = []
-
-        def handle_response(response):
-            try:
-                ct = response.headers.get("content-type", "")
-                if "application/json" in ct and any(
-                    kw in response.url
-                    for kw in ["zmluv", "faktur", "objednav", "document", "contract", "invoice", "api"]
-                ):
-                    try:
-                        data = response.json()
-                        api_responses.append({"url": response.url, "data": data})
-                        print(f"[API] {response.url}", file=sys.stderr)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        page = context.new_page()
-        page.on("response", handle_response)
-
-        try:
-            for dtype in _get_doc_types(doc_type):
-                api_responses.clear()
-                type_docs = _scrape_doc_type(
-                    page, org_slug, dtype, keyword, max_pages, api_responses
-                )
-                # Nastav organizáciu na každom dokumente
-                for d in type_docs:
-                    d.organizacia = org_nazov
-                    d.org_slug = org_slug
-                docs.extend(type_docs)
-
-            if scrape_details:
-                docs = _enrich_with_details(page, docs)
-
-        except PlaywrightTimeoutError:
-            print("[!] Timeout.", file=sys.stderr)
-        except Exception as e:
-            print(f"[!] Chyba: {e}", file=sys.stderr)
-        finally:
-            browser.close()
-
-    if keyword:
-        kw = keyword.lower()
-        docs = [
-            d for d in docs
-            if kw in d.nazov.lower()
-            or kw in d.dodavatel.lower()
-            or kw in d.popis.lower()
-            or kw in d.kategoria.lower()
-            or kw in d.cislo.lower()
-        ]
-
-    return docs
-
-
 def scrape_vsetky_organizacie(
     keyword: str = "",
     doc_type: str = "all",
+    rok_arg: int | None = None,
     max_pages: int = 10,
     headless: bool = True,
     scrape_details: bool = True,
-    org_slugs: list[str] | None = None,
+    org_ids: list[str] | None = None,
 ) -> list[Dokument]:
-    """Scrape všetky SNV organizácie postupne (jeden browser)."""
-    orgs = org_slugs or list(SNV_ORGANIZACIE.keys())
+    """Scrape všetky SNV organizácie v jednom browseri."""
+    orgs = org_ids or list(SNV_ORGANIZACIE.keys())
+    years = get_years(rok_arg)
     all_docs: list[Dokument] = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1366, "height": 768},
-            locale="sk-SK",
-            extra_http_headers={
-                "Accept-Language": "sk-SK,sk;q=0.9,en;q=0.8",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            },
-        )
-
-        api_responses: list[dict] = []
-
-        def handle_response(response):
-            try:
-                ct = response.headers.get("content-type", "")
-                if "application/json" in ct and any(
-                    kw in response.url
-                    for kw in ["zmluv", "faktur", "objednav", "document", "api"]
-                ):
-                    try:
-                        data = response.json()
-                        api_responses.append({"url": response.url, "data": data})
-                        print(f"[API] {response.url}", file=sys.stderr)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        page = context.new_page()
-        page.on("response", handle_response)
+        ctx = _make_context(p, browser)
+        api_buf: list[dict] = []
+        page = ctx.new_page()
+        page.on("response", _make_api_handler(api_buf))
 
         try:
-            for org_slug in orgs:
-                org_nazov = SNV_ORGANIZACIE.get(org_slug, org_slug)
-                print(f"\n[ORG] {org_nazov} ({org_slug})", file=sys.stderr)
-
+            for org_id in orgs:
+                org_nazov = SNV_ORGANIZACIE.get(org_id, org_id)
+                print(f"\n[ORG] {org_nazov} ({org_id})", file=sys.stderr)
                 org_docs: list[Dokument] = []
-                for dtype in _get_doc_types(doc_type):
-                    api_responses.clear()
-                    type_docs = _scrape_doc_type(
-                        page, org_slug, dtype, keyword, max_pages, api_responses
-                    )
-                    for d in type_docs:
-                        d.organizacia = org_nazov
-                        d.org_slug = org_slug
-                    org_docs.extend(type_docs)
+
+                for rok in years:
+                    for dtype_slug in get_doc_type_slugs(doc_type):
+                        api_buf.clear()
+                        docs = _scrape_url(
+                            page, org_id, org_nazov, dtype_slug, rok,
+                            keyword, max_pages, api_buf
+                        )
+                        org_docs.extend(docs)
 
                 if scrape_details:
                     org_docs = _enrich_with_details(page, org_docs)
 
-                if keyword:
-                    kw = keyword.lower()
-                    org_docs = [
-                        d for d in org_docs
-                        if kw in d.nazov.lower()
-                        or kw in d.dodavatel.lower()
-                        or kw in d.popis.lower()
-                        or kw in d.kategoria.lower()
-                        or kw in d.cislo.lower()
-                    ]
-
-                print(f"[✓] {org_nazov}: {len(org_docs)} dokumentov", file=sys.stderr)
+                org_docs = _filter_keyword(org_docs, keyword)
+                print(f"  [✓] {len(org_docs)} dokumentov", file=sys.stderr)
                 all_docs.extend(org_docs)
 
-        except PlaywrightTimeoutError:
-            print("[!] Timeout.", file=sys.stderr)
         except Exception as e:
             print(f"[!] Chyba: {e}", file=sys.stderr)
         finally:
@@ -290,59 +209,143 @@ def scrape_vsetky_organizacie(
     return all_docs
 
 
+def scrape_organizacia(
+    org_id: str,
+    org_nazov: str,
+    keyword: str = "",
+    doc_type: str = "all",
+    rok_arg: int | None = None,
+    max_pages: int = 10,
+    headless: bool = True,
+    scrape_details: bool = True,
+) -> list[Dokument]:
+    """Scrape jednu organizáciu."""
+    years = get_years(rok_arg)
+    all_docs: list[Dokument] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        ctx = _make_context(p, browser)
+        api_buf: list[dict] = []
+        page = ctx.new_page()
+        page.on("response", _make_api_handler(api_buf))
+
+        try:
+            for rok in years:
+                for dtype_slug in get_doc_type_slugs(doc_type):
+                    api_buf.clear()
+                    docs = _scrape_url(
+                        page, org_id, org_nazov, dtype_slug, rok,
+                        keyword, max_pages, api_buf
+                    )
+                    all_docs.extend(docs)
+
+            if scrape_details:
+                all_docs = _enrich_with_details(page, all_docs)
+
+        except Exception as e:
+            print(f"[!] Chyba: {e}", file=sys.stderr)
+        finally:
+            browser.close()
+
+    return _filter_keyword(all_docs, keyword)
+
+
+def _make_context(p, browser):
+    return browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        # Desktop viewport – zabezpečí zobrazenie search poľa (na mobile chýba)
+        viewport={"width": 1440, "height": 900},
+        locale="sk-SK",
+        extra_http_headers={
+            "Accept-Language": "sk-SK,sk;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        },
+    )
+
+
+def _make_api_handler(api_buf: list[dict]):
+    def handle_response(response):
+        try:
+            ct = response.headers.get("content-type", "")
+            if "application/json" not in ct:
+                return
+            url = response.url
+            if not any(k in url for k in [
+                "zmluv", "faktur", "objednav", "document", "contract",
+                "invoice", "order", "api", "zverejn", "data",
+            ]):
+                return
+            try:
+                data = response.json()
+                api_buf.append({"url": url, "status": response.status, "data": data})
+                print(f"  [API] {url}", file=sys.stderr)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    return handle_response
+
+
 # ---------------------------------------------------------------------------
-# Scraping jedného typu dokumentov
+# Scraping jednej URL (org + typ + rok)
 # ---------------------------------------------------------------------------
 
-def _scrape_doc_type(
+def _scrape_url(
     page,
-    org_slug: str,
-    dtype: str,
+    org_id: str,
+    org_nazov: str,
+    dtype_slug: str,
+    rok: int,
     keyword: str,
     max_pages: int,
-    api_responses: list[dict],
+    api_buf: list[dict],
 ) -> list[Dokument]:
-    docs: list[Dokument] = []
-    section_map = {"zmluvy": "zmluvy", "faktury": "faktury", "objednavky": "objednavky"}
-    section = section_map[dtype]
-    direct_url = f"{BASE_URL}/mesto/{org_slug}/{section}"
+    url = build_url(org_id, dtype_slug, rok)
+    doc_type = DOC_TYPES.get(dtype_slug, dtype_slug)
+    print(f"  [→] {dtype_slug}/{rok}: {url}", file=sys.stderr)
 
-    print(f"  [→] {dtype}: {direct_url}", file=sys.stderr)
     try:
-        resp = page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
-        if resp and resp.status in (404, 403):
-            # Fallback: hlavná stránka + tab
-            city_url = f"{BASE_URL}/mesto/{org_slug}/"
-            page.goto(city_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2000)
-            _navigate_to_section(page, dtype)
+        resp = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        if resp and resp.status == 404:
+            print(f"  [~] 404 – org/typ neexistuje", file=sys.stderr)
+            return []
+        if resp and resp.status == 403:
+            print(f"  [~] 403 – prístup zamietnutý", file=sys.stderr)
+            return []
     except Exception as e:
-        print(f"  [!] {dtype}: {e}", file=sys.stderr)
-        return docs
+        print(f"  [!] Goto error: {e}", file=sys.stderr)
+        return []
 
-    page.wait_for_timeout(2500)
+    # Počkaj na SPA render
+    page.wait_for_timeout(3000)
     _log_page_info(page)
 
+    # Vyhľadávanie (search pole viditeľné iba na PC viewporte)
     if keyword:
         _try_search(page, keyword)
         page.wait_for_timeout(2000)
 
-    # Skús API
-    if api_responses:
-        api_docs = _parse_api_responses(api_responses, dtype)
+    # Skús API odpovede zachytené počas načítania
+    if api_buf:
+        api_docs = _parse_api_responses(api_buf, doc_type, org_id, org_nazov, rok)
         if api_docs:
-            print(f"  [API] {dtype}: {len(api_docs)} z API", file=sys.stderr)
-            docs.extend(api_docs)
-            docs.extend(_paginate_api(page, dtype, max_pages, api_responses))
-            return _deduplicate(docs)
+            print(f"  [API] {len(api_docs)} dokumentov", file=sys.stderr)
+            api_docs.extend(_paginate_api(page, doc_type, org_id, org_nazov, rok, max_pages, api_buf))
+            return _deduplicate(api_docs)
 
-    # DOM scraping
+    # DOM scraping + stránkovanie
+    docs: list[Dokument] = []
     for page_num in range(1, max_pages + 1):
-        page_docs = _extract_from_page(page, dtype)
+        page_docs = _extract_from_page(page, doc_type, org_id, org_nazov, str(rok))
         if not page_docs:
             break
         docs.extend(page_docs)
-        print(f"  [i] {dtype} str.{page_num}: {len(page_docs)} dok.", file=sys.stderr)
+        print(f"  [DOM] str.{page_num}: {len(page_docs)} dok.", file=sys.stderr)
         if not _go_next_page(page):
             break
         page.wait_for_timeout(1200)
@@ -350,15 +353,15 @@ def _scrape_doc_type(
     return _deduplicate(docs)
 
 
-def _paginate_api(page, dtype: str, max_pages: int, api_responses: list[dict]) -> list[Dokument]:
+def _paginate_api(page, doc_type, org_id, org_nazov, rok, max_pages, api_buf) -> list[Dokument]:
     docs: list[Dokument] = []
     for _ in range(2, max_pages + 1):
-        api_responses.clear()
+        api_buf.clear()
         if not _go_next_page(page):
             break
         page.wait_for_timeout(1500)
-        if api_responses:
-            page_docs = _parse_api_responses(api_responses, dtype)
+        if api_buf:
+            page_docs = _parse_api_responses(api_buf, doc_type, org_id, org_nazov, rok)
             if not page_docs:
                 break
             docs.extend(page_docs)
@@ -371,11 +374,17 @@ def _paginate_api(page, dtype: str, max_pages: int, api_responses: list[dict]) -
 # API parsing
 # ---------------------------------------------------------------------------
 
-def _parse_api_responses(api_responses: list[dict], dtype: str) -> list[Dokument]:
+def _parse_api_responses(
+    api_buf: list[dict],
+    doc_type: str,
+    org_id: str,
+    org_nazov: str,
+    rok: int | str,
+) -> list[Dokument]:
     docs: list[Dokument] = []
-    for resp in api_responses:
+    for resp in api_buf:
         for item in _extract_items_from_json(resp.get("data", {})):
-            doc = _map_api_item(item, dtype)
+            doc = _map_api_item(item, doc_type, org_id, org_nazov, str(rok))
             if doc.nazov or doc.cislo:
                 docs.append(doc)
     return docs
@@ -386,7 +395,8 @@ def _extract_items_from_json(data: Any) -> list[dict]:
         return data
     if isinstance(data, dict):
         for key in ["items", "data", "results", "records", "documents",
-                    "zmluvy", "faktury", "objednavky", "content", "list"]:
+                    "zmluvy", "faktury", "objednavky", "content", "list",
+                    "rows", "entries", "contracts", "invoices", "orders"]:
             val = data.get(key)
             if isinstance(val, list):
                 return val
@@ -397,52 +407,55 @@ def _extract_items_from_json(data: Any) -> list[dict]:
     return []
 
 
-def _map_api_item(item: dict, dtype: str) -> Dokument:
-    doc = Dokument(typ=dtype, raw=item)
+def _map_api_item(item: dict, doc_type: str, org_id: str, org_nazov: str, rok: str) -> Dokument:
+    doc = Dokument(typ=doc_type, org_id=org_id, organizacia=org_nazov, rok=rok, raw=item)
 
-    def get(*keys: str) -> str:
+    def g(*keys: str) -> str:
         for k in keys:
             v = item.get(k)
             if v and str(v).strip():
                 return str(v).strip()
         return ""
 
-    doc.id_dokumentu   = get("id", "uuid", "documentId")
-    doc.cislo          = get("number", "cislo", "contractNumber", "invoiceNumber", "orderNumber", "documentNumber")
-    doc.nazov          = get("subject", "name", "title", "nazov", "predmet", "description", "Name", "Subject")
-    doc.popis          = get("description", "note", "popis", "Description")
-    doc.dodavatel      = get("supplier", "supplierName", "vendor", "vendorName", "contractor", "dodavatel", "firma")
-    doc.ico            = get("ico", "supplierIco", "vendorIco", "ICO", "supplierRegistrationNumber")
-    doc.dic            = get("dic", "DIC", "taxId", "vatNumber")
-    doc.adresa_dodavatela = get("supplierAddress", "vendorAddress", "address", "adresa")
-    doc.objednavatel   = get("customer", "customerName", "buyer", "objednavatel")
-    doc.oddelenie      = get("department", "oddelenie", "section", "unit")
-    doc.suma           = get("amount", "value", "price", "suma", "cena", "totalAmount", "hodnota")
-    doc.suma_bez_dph   = get("amountWithoutVat", "priceWithoutVat", "sumaBezvDph", "netAmount")
-    doc.mena           = get("currency", "mena") or "EUR"
-    doc.datum          = get("date", "signDate", "contractDate", "datum", "datumPodpisu", "issueDate", "orderDate")
-    doc.datum_ucinnosti  = get("effectiveDate", "datumUcinnosti", "dueDate", "datumSplatnosti", "validFrom")
-    doc.datum_zverejnenia = get("publishedDate", "publicationDate", "datumZverejnenia", "createdAt")
-    doc.datum_platnosti_do = get("validTo", "expiryDate", "datumPlatnostiDo", "endDate")
-    doc.kategoria      = get("category", "kategoria", "type", "documentType")
-    doc.podkategoria   = get("subcategory", "podkategoria", "subtype")
-    doc.rok            = get("year", "rok")
-    doc.stav           = get("status", "stav", "state")
-    doc.poznamka       = get("note", "remark", "comment", "poznamka")
+    doc.id_dokumentu      = g("id", "uuid", "documentId", "Id")
+    doc.cislo             = g("number", "cislo", "contractNumber", "invoiceNumber", "orderNumber", "documentNumber", "Cislo", "No")
+    doc.nazov             = g("subject", "name", "title", "nazov", "predmet", "Name", "Subject", "Title", "description")
+    doc.popis             = g("description", "note", "popis", "Description", "longDescription")
+    doc.dodavatel         = g("supplier", "supplierName", "vendor", "vendorName", "contractor", "dodavatel", "firma", "Supplier", "Vendor")
+    doc.ico               = g("ico", "supplierIco", "vendorIco", "ICO", "supplierRegistrationNumber", "registrationNumber")
+    doc.dic               = g("dic", "DIC", "taxId", "vatNumber", "taxNumber")
+    doc.adresa_dodavatela = g("supplierAddress", "vendorAddress", "address", "adresa", "supplierCity")
+    doc.objednavatel      = g("customer", "customerName", "buyer", "objednavatel", "odberatel")
+    doc.oddelenie         = g("department", "oddelenie", "section", "unit", "Department", "division")
+    doc.suma              = g("amount", "value", "price", "suma", "cena", "totalAmount", "totalPrice", "hodnota", "Amount", "Total")
+    doc.suma_bez_dph      = g("amountWithoutVat", "priceWithoutVat", "sumaBezvDph", "netAmount", "netValue", "baseAmount")
+    doc.mena              = g("currency", "mena", "Currency") or "EUR"
+    doc.datum             = g("date", "signDate", "contractDate", "datum", "datumPodpisu", "issueDate", "orderDate", "Date", "signedDate")
+    doc.datum_ucinnosti   = g("effectiveDate", "datumUcinnosti", "dueDate", "datumSplatnosti", "validFrom", "startDate")
+    doc.datum_zverejnenia = g("publishedDate", "publicationDate", "datumZverejnenia", "createdAt", "publishDate", "publishedAt")
+    doc.datum_platnosti_do = g("validTo", "expiryDate", "datumPlatnostiDo", "endDate", "expirationDate", "validUntil")
+    doc.kategoria         = g("category", "kategoria", "type", "documentType", "Category", "Type")
+    doc.podkategoria      = g("subcategory", "podkategoria", "subtype", "SubCategory")
+    doc.stav              = g("status", "stav", "state", "Status", "State")
+    doc.poznamka          = g("note", "remark", "comment", "poznamka", "Note", "Remark")
 
-    url = get("url", "link", "detailUrl", "href")
+    if not doc.rok:
+        doc.rok = rok
+
+    url = g("url", "link", "detailUrl", "href", "Url", "detailLink")
     doc.url = url if url.startswith("http") else (BASE_URL + url if url else "")
 
-    for fkey in ["files", "attachments", "documents", "subory", "prilohy"]:
+    for fkey in ["files", "attachments", "documents", "subory", "prilohy", "Downloads", "attachedFiles"]:
         fval = item.get(fkey)
-        if isinstance(fval, list):
-            for f in fval:
-                if isinstance(f, str):
-                    doc.subory.append(f if f.startswith("http") else BASE_URL + f)
-                elif isinstance(f, dict):
-                    furl = f.get("url") or f.get("href") or f.get("path") or ""
-                    if furl:
-                        doc.subory.append(furl if furl.startswith("http") else BASE_URL + furl)
+        if not isinstance(fval, list):
+            continue
+        for f in fval:
+            if isinstance(f, str):
+                doc.subory.append(f if f.startswith("http") else BASE_URL + f)
+            elif isinstance(f, dict):
+                furl = f.get("url") or f.get("href") or f.get("path") or f.get("link") or ""
+                if furl:
+                    doc.subory.append(furl if furl.startswith("http") else BASE_URL + furl)
 
     return doc
 
@@ -451,18 +464,19 @@ def _map_api_item(item: dict, dtype: str) -> Dokument:
 # DOM scraping
 # ---------------------------------------------------------------------------
 
-def _extract_from_page(page, doc_type: str) -> list[Dokument]:
-    docs = _extract_from_tables(page, doc_type)
+def _extract_from_page(page, doc_type: str, org_id: str, org_nazov: str, rok: str) -> list[Dokument]:
+    base_fields = dict(org_id=org_id, organizacia=org_nazov, rok=rok)
+    docs = _extract_from_tables(page, doc_type, base_fields)
     if docs:
         return docs
-    docs = _extract_from_list(page, doc_type)
+    docs = _extract_from_list(page, doc_type, base_fields)
     if docs:
         return docs
-    docs = _extract_from_cards(page, doc_type)
+    docs = _extract_from_cards(page, doc_type, base_fields)
     return docs
 
 
-def _extract_from_tables(page, doc_type: str) -> list[Dokument]:
+def _extract_from_tables(page, doc_type: str, base_fields: dict) -> list[Dokument]:
     docs: list[Dokument] = []
     try:
         for table in page.locator("table").all():
@@ -471,42 +485,44 @@ def _extract_from_tables(page, doc_type: str) -> list[Dokument]:
                 cells = row.locator("td").all()
                 if not cells:
                     continue
-                doc = Dokument(typ=doc_type)
+                doc = Dokument(typ=doc_type, **base_fields)
                 cell_texts = [c.inner_text().strip() for c in cells]
 
                 for i, h in enumerate(headers):
                     if i >= len(cell_texts):
                         break
                     v = cell_texts[i]
-                    if any(k in h for k in ["číslo", "cislo", "number", "č."]):
+                    if any(k in h for k in ["číslo", "cislo", "number", "č.", "poradové"]):
                         doc.cislo = v
-                    elif any(k in h for k in ["názov", "predmet", "name", "subject", "opis"]):
+                    elif any(k in h for k in ["predmet", "názov", "name", "subject", "popis", "opis"]):
                         doc.nazov = v
-                    elif any(k in h for k in ["dodávateľ", "firma", "supplier", "vendor", "subjekt"]):
+                    elif any(k in h for k in ["dodávateľ", "firma", "supplier", "vendor", "zhotoviteľ", "subjekt"]):
                         doc.dodavatel = v
-                    elif "ičo" in h or h == "ico":
+                    elif "ičo" in h or h.strip() == "ico":
                         doc.ico = v
-                    elif any(k in h for k in ["dátum účinnosti", "účinnosti", "effective"]):
+                    elif any(k in h for k in ["dič", "dic"]):
+                        doc.dic = v
+                    elif any(k in h for k in ["dátum účinnosti", "účinnosti", "effective", "splatnosti"]):
                         doc.datum_ucinnosti = v
-                    elif any(k in h for k in ["dátum zverej", "zverejnenia", "published"]):
+                    elif any(k in h for k in ["dátum zverej", "zverejnenia", "zverejnen", "published"]):
                         doc.datum_zverejnenia = v
+                    elif any(k in h for k in ["dátum podpisu", "podpisu", "sign", "uzatvoren", "vystaveni"]):
+                        doc.datum = v
                     elif any(k in h for k in ["dátum", "date", "datum"]):
                         if not doc.datum:
                             doc.datum = v
-                    elif any(k in h for k in ["suma", "cena", "hodnota", "amount", "€", "eur"]):
-                        if "bez" in h or "net" in h:
-                            doc.suma_bez_dph = v
-                        else:
-                            doc.suma = v
-                    elif any(k in h for k in ["kategór", "category"]):
+                    elif any(k in h for k in ["suma bez", "bez dph", "základ", "net"]):
+                        doc.suma_bez_dph = v
+                    elif any(k in h for k in ["suma", "cena", "hodnota", "amount", "€", "eur", "price"]):
+                        doc.suma = v
+                    elif any(k in h for k in ["kategór", "category", "druh"]):
                         doc.kategoria = v
-                    elif any(k in h for k in ["oddelenie", "útvar", "department"]):
+                    elif any(k in h for k in ["oddelenie", "útvar", "department", "referát"]):
                         doc.oddelenie = v
                     elif any(k in h for k in ["stav", "status"]):
                         doc.stav = v
-                    elif any(k in h for k in ["rok", "year"]):
-                        doc.rok = v
 
+                # Pozičný fallback
                 if not doc.nazov and cell_texts:
                     doc.nazov = cell_texts[0]
                 if not doc.dodavatel and len(cell_texts) >= 2:
@@ -516,12 +532,13 @@ def _extract_from_tables(page, doc_type: str) -> list[Dokument]:
                 if not doc.suma and len(cell_texts) >= 4:
                     doc.suma = cell_texts[3]
 
-                links = row.locator("a").all()
-                if links:
+                # URL z linkov v riadku
+                for link in row.locator("a").all():
                     try:
-                        href = links[0].get_attribute("href") or ""
+                        href = link.get_attribute("href") or ""
                         if href:
                             doc.url = href if href.startswith("http") else BASE_URL + href
+                            break
                     except Exception:
                         pass
 
@@ -532,7 +549,7 @@ def _extract_from_tables(page, doc_type: str) -> list[Dokument]:
     return docs
 
 
-def _extract_from_list(page, doc_type: str) -> list[Dokument]:
+def _extract_from_list(page, doc_type: str, base_fields: dict) -> list[Dokument]:
     docs: list[Dokument] = []
     try:
         selectors = [
@@ -547,7 +564,7 @@ def _extract_from_list(page, doc_type: str) -> list[Dokument]:
             if not items:
                 continue
             for item in items:
-                doc = _parse_item_element(item, doc_type)
+                doc = _parse_item_element(item, doc_type, base_fields)
                 if doc.nazov or doc.cislo:
                     docs.append(doc)
             if docs:
@@ -557,7 +574,7 @@ def _extract_from_list(page, doc_type: str) -> list[Dokument]:
     return docs
 
 
-def _extract_from_cards(page, doc_type: str) -> list[Dokument]:
+def _extract_from_cards(page, doc_type: str, base_fields: dict) -> list[Dokument]:
     docs: list[Dokument] = []
     try:
         for sel in [".card", ".item-card", ".document-card", "[class*='card']", "article", ".tile"]:
@@ -565,7 +582,7 @@ def _extract_from_cards(page, doc_type: str) -> list[Dokument]:
             if not cards:
                 continue
             for card in cards:
-                doc = _parse_item_element(card, doc_type)
+                doc = _parse_item_element(card, doc_type, base_fields)
                 if not doc.nazov:
                     for heading in ["h1", "h2", "h3", "h4", ".title", ".name"]:
                         try:
@@ -584,9 +601,10 @@ def _extract_from_cards(page, doc_type: str) -> list[Dokument]:
     return docs
 
 
-def _parse_item_element(item, doc_type: str) -> Dokument:
-    doc = Dokument(typ=doc_type)
+def _parse_item_element(item, doc_type: str, base_fields: dict) -> Dokument:
+    doc = Dokument(typ=doc_type, **base_fields)
 
+    # data-* atribúty
     for attr, fname in [
         ("data-id", "id_dokumentu"), ("data-number", "cislo"), ("data-name", "nazov"),
         ("data-supplier", "dodavatel"), ("data-ico", "ico"), ("data-amount", "suma"),
@@ -599,6 +617,7 @@ def _parse_item_element(item, doc_type: str) -> Dokument:
         except Exception:
             pass
 
+    # CSS class selektory
     for sel, fname in [
         (".cislo, .number, [class*='number']", "cislo"),
         (".nazov, .name, .title, .predmet, [class*='subject']", "nazov"),
@@ -620,6 +639,7 @@ def _parse_item_element(item, doc_type: str) -> Dokument:
         except Exception:
             pass
 
+    # Textový fallback
     if not doc.nazov:
         try:
             lines = [l.strip() for l in item.inner_text().strip().split("\n") if l.strip()]
@@ -634,6 +654,7 @@ def _parse_item_element(item, doc_type: str) -> Dokument:
         except Exception:
             pass
 
+    # Linky a PDF prílohy
     try:
         for link in item.locator("a").all():
             href = link.get_attribute("href") or ""
@@ -656,51 +677,37 @@ def _parse_item_element(item, doc_type: str) -> Dokument:
 # ---------------------------------------------------------------------------
 
 LABEL_MAP: dict[str, str] = {
-    # Číslo
     "číslo zmluvy": "cislo", "číslo faktúry": "cislo", "číslo objednávky": "cislo",
-    "číslo": "cislo", "number": "cislo", "contract number": "cislo",
-    # Predmet
+    "číslo": "cislo", "number": "cislo",
     "predmet": "nazov", "predmet zmluvy": "nazov", "názov": "nazov",
     "subject": "nazov", "title": "nazov",
-    # Popis
     "popis": "popis", "description": "popis",
     "poznámka": "poznamka", "note": "poznamka",
-    # Dodávateľ
     "dodávateľ": "dodavatel", "zhotoviteľ": "dodavatel", "supplier": "dodavatel",
     "vendor": "dodavatel", "firma": "dodavatel", "obchodné meno": "dodavatel",
-    # IČO / DIČ
     "ičo": "ico", "ico": "ico", "ič": "ico",
-    "dič": "dic", "dic": "dic", "tax id": "dic",
-    "adresa": "adresa_dodavatela", "address": "adresa_dodavatela",
-    # Objednávateľ
+    "dič": "dic", "dic": "dic",
+    "adresa": "adresa_dodavatela",
     "objednávateľ": "objednavatel", "odberateľ": "objednavatel",
-    "customer": "objednavatel", "buyer": "objednavatel",
-    "oddelenie": "oddelenie", "útvar": "oddelenie", "department": "oddelenie",
-    "referát": "oddelenie", "organizačná jednotka": "oddelenie",
-    # Financie
+    "oddelenie": "oddelenie", "útvar": "oddelenie", "referát": "oddelenie",
+    "organizačná jednotka": "oddelenie",
     "suma": "suma", "hodnota": "suma", "cena": "suma",
     "celková suma": "suma", "celková hodnota": "suma",
     "suma s dph": "suma", "cena s dph": "suma",
-    "amount": "suma", "total": "suma", "price": "suma",
+    "amount": "suma", "total": "suma",
     "suma bez dph": "suma_bez_dph", "cena bez dph": "suma_bez_dph",
-    "základ dane": "suma_bez_dph", "net amount": "suma_bez_dph",
+    "základ dane": "suma_bez_dph",
     "mena": "mena", "currency": "mena",
-    # Dátumy
     "dátum uzatvorenia": "datum", "dátum podpisu": "datum",
-    "dátum vystavenia": "datum", "dátum objednávky": "datum",
-    "date": "datum", "sign date": "datum",
+    "dátum vystavenia": "datum", "dátum objednávky": "datum", "date": "datum",
     "dátum účinnosti": "datum_ucinnosti", "účinnosť od": "datum_ucinnosti",
-    "effective date": "datum_ucinnosti", "dátum splatnosti": "datum_ucinnosti",
+    "dátum splatnosti": "datum_ucinnosti",
     "dátum zverejnenia": "datum_zverejnenia", "zverejnené": "datum_zverejnenia",
-    "published": "datum_zverejnenia",
     "platnosť do": "datum_platnosti_do", "dátum ukončenia": "datum_platnosti_do",
-    "valid to": "datum_platnosti_do", "expiry date": "datum_platnosti_do",
-    # Kategórie
-    "kategória": "kategoria", "category": "kategoria",
-    "druh": "kategoria", "type": "kategoria",
-    "podkategória": "podkategoria", "subcategory": "podkategoria",
+    "kategória": "kategoria", "category": "kategoria", "druh": "kategoria",
+    "podkategória": "podkategoria",
     "rok": "rok", "year": "rok",
-    "stav": "stav", "status": "stav", "state": "stav",
+    "stav": "stav", "status": "stav",
 }
 
 
@@ -711,7 +718,7 @@ def _enrich_with_details(page, docs: list[Dokument]) -> list[Dokument]:
         try:
             print(f"  [→] Detail {i+1}/{len(docs)}: {doc.url}", file=sys.stderr)
             page.goto(doc.url, wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_timeout(1200)
+            page.wait_for_timeout(1500)
             _parse_detail_page(page, doc)
         except Exception as e:
             print(f"  [~] Detail: {e}", file=sys.stderr)
@@ -719,12 +726,6 @@ def _enrich_with_details(page, docs: list[Dokument]) -> list[Dokument]:
 
 
 def _parse_detail_page(page, doc: Dokument) -> None:
-    _extract_label_values(page, doc)
-    _extract_detail_fields(page, doc)
-    _extract_files(page, doc)
-
-
-def _extract_label_values(page, doc: Dokument) -> None:
     # dl > dt + dd
     try:
         for dt in page.locator("dl dt").all():
@@ -747,7 +748,7 @@ def _extract_label_values(page, doc: Dokument) -> None:
     except Exception:
         pass
 
-    # div páry
+    # div páry label:value
     try:
         for sel in [".field", ".detail-field", ".info-row", ".data-row",
                     "[class*='field']", "[class*='detail-row']", "[class*='info-item']"]:
@@ -759,37 +760,25 @@ def _extract_label_values(page, doc: Dokument) -> None:
                 if ":" in text:
                     parts = text.split(":", 1)
                     _set_field(doc, parts[0].strip().lower(), parts[1].strip())
-            if any([doc.dodavatel, doc.suma, doc.datum]):
+            if doc.dodavatel or doc.suma:
                 break
     except Exception:
         pass
 
-
-def _set_field(doc: Dokument, label: str, val: str) -> None:
-    if not val:
-        return
-    fname = LABEL_MAP.get(label.strip())
-    if fname and not getattr(doc, fname, ""):
-        setattr(doc, fname, val)
-
-
-def _extract_detail_fields(page, doc: Dokument) -> None:
+    # Konkrétne CSS triedy
     for sel, fname in [
-        (".cislo, .contract-number, .document-number, [class*='number']", "cislo"),
-        (".nazov, .subject, .predmet, [class*='subject'], [class*='title']", "nazov"),
-        (".dodavatel, .supplier, .vendor, [class*='supplier']", "dodavatel"),
-        (".ico, [class*='-ico']", "ico"),
-        (".dic, [class*='-dic']", "dic"),
-        (".suma, .amount, .price, .value, [class*='amount'], [class*='price']", "suma"),
-        (".datum, .date, [class*='-date'], [class*='datum']", "datum"),
-        (".datum-ucinnosti, .effective-date, [class*='effective']", "datum_ucinnosti"),
-        (".datum-zverejnenia, .published-date, [class*='published']", "datum_zverejnenia"),
+        (".cislo, .contract-number, [class*='number']", "cislo"),
+        (".nazov, .subject, .predmet, [class*='subject']", "nazov"),
+        (".dodavatel, .supplier, [class*='supplier']", "dodavatel"),
+        (".ico", "ico"),
+        (".dic", "dic"),
+        (".suma, .amount, [class*='amount']", "suma"),
+        (".datum-ucinnosti, [class*='effective']", "datum_ucinnosti"),
+        (".datum-zverejnenia, [class*='published']", "datum_zverejnenia"),
         (".kategoria, .category, [class*='category']", "kategoria"),
         (".oddelenie, .department, [class*='department']", "oddelenie"),
         (".stav, .status, [class*='status']", "stav"),
-        (".rok, .year, [class*='year']", "rok"),
         (".popis, .description, [class*='description']", "popis"),
-        (".poznamka, .note, .remark, [class*='note']", "poznamka"),
     ]:
         if getattr(doc, fname):
             continue
@@ -800,17 +789,15 @@ def _extract_detail_fields(page, doc: Dokument) -> None:
         except Exception:
             pass
 
-
-def _extract_files(page, doc: Dokument) -> None:
+    # Prílohy / PDF súbory
     try:
         seen = set(doc.subory)
         for sel in [
             "a[href$='.pdf']", "a[href$='.PDF']",
             "a[href*='download']", "a[href*='priloha']",
-            "a[href*='attachment']", "a[href*='file']",
+            "a[href*='attachment']",
             ".attachment a", ".file-list a", ".download a",
-            "[class*='attachment'] a", "[class*='file'] a",
-            "[class*='download'] a", "[class*='priloha'] a",
+            "[class*='attachment'] a", "[class*='download'] a",
         ]:
             for link in page.locator(sel).all():
                 try:
@@ -828,27 +815,61 @@ def _extract_files(page, doc: Dokument) -> None:
         pass
 
 
+def _set_field(doc: Dokument, label: str, val: str) -> None:
+    if not val:
+        return
+    fname = LABEL_MAP.get(label.strip())
+    if fname and not getattr(doc, fname, ""):
+        setattr(doc, fname, val)
+
+
 # ---------------------------------------------------------------------------
-# Navigačné pomocné funkcie
+# Pomocné funkcie
 # ---------------------------------------------------------------------------
+
+def _filter_keyword(docs: list[Dokument], keyword: str) -> list[Dokument]:
+    if not keyword:
+        return docs
+    kw = keyword.lower()
+    return [
+        d for d in docs
+        if kw in d.nazov.lower()
+        or kw in d.dodavatel.lower()
+        or kw in d.popis.lower()
+        or kw in d.kategoria.lower()
+        or kw in d.cislo.lower()
+        or kw in d.ico.lower()
+    ]
+
 
 def _log_page_info(page) -> None:
     try:
-        print(f"  [i] {page.title()} ({page.url})", file=sys.stderr)
+        print(f"  [i] {page.title()} | {page.url}", file=sys.stderr)
     except Exception:
         pass
 
 
 def _try_search(page, keyword: str) -> bool:
-    for sel in [
-        'input[type="search"]', 'input[placeholder*="hľadaj" i]',
-        'input[placeholder*="vyhľadaj" i]', 'input[placeholder*="search" i]',
-        'input[placeholder*="filter" i]', 'input[name="q"]', 'input[name="search"]',
-        '.search-input input', '#search-input', '#keyword',
-    ]:
+    """Pokus o vyplnenie search poľa – viditeľné iba pri desktop viewporte (≥1024px)."""
+    selectors = [
+        'input[type="search"]',
+        'input[placeholder*="hľadaj" i]',
+        'input[placeholder*="vyhľadaj" i]',
+        'input[placeholder*="search" i]',
+        'input[placeholder*="filter" i]',
+        'input[placeholder*="zadaj" i]',
+        'input[name="q"]',
+        'input[name="search"]',
+        'input[name="keyword"]',
+        '.search-input input',
+        '#search-input',
+        '#keyword',
+        '.filter input',
+    ]
+    for sel in selectors:
         try:
             loc = page.locator(sel)
-            if loc.count() > 0:
+            if loc.count() > 0 and loc.first.is_visible():
                 loc.first.clear()
                 loc.first.fill(keyword)
                 loc.first.press("Enter")
@@ -856,33 +877,23 @@ def _try_search(page, keyword: str) -> bool:
                 return True
         except Exception:
             continue
-    print("  [~] Search formulár nenájdený.", file=sys.stderr)
+
+    # Submit tlačidlo po vyplnení
+    for sel in selectors[:6]:
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                loc.first.fill(keyword)
+                for btn in ['button[type="submit"]', 'button:text("Hľadaj")',
+                            'button:text("Vyhľadať")', '.search-btn', '.btn-search']:
+                    if page.locator(btn).count() > 0:
+                        page.locator(btn).first.click()
+                        return True
+        except Exception:
+            continue
+
+    print("  [~] Search pole nenájdené (filter bude klientsky).", file=sys.stderr)
     return False
-
-
-def _get_doc_types(doc_type: str) -> list[str]:
-    if doc_type == "all":
-        return ["zmluvy", "faktury", "objednavky"]
-    return [doc_type] if doc_type in ("zmluvy", "faktury", "objednavky") else ["zmluvy", "faktury", "objednavky"]
-
-
-def _navigate_to_section(page, section: str) -> None:
-    labels = {
-        "zmluvy": ["Zmluvy", "zmluvy", "Contracts"],
-        "faktury": ["Faktúry", "faktury", "Faktury", "Invoices"],
-        "objednavky": ["Objednávky", "objednavky", "Objednavky", "Orders"],
-    }
-    for label in labels.get(section, []):
-        for tmpl in [
-            f'a:text-is("{label}")', f'button:text-is("{label}")',
-            f'[role="tab"]:text-is("{label}")', f'a:text("{label}")',
-        ]:
-            try:
-                if page.locator(tmpl).count() > 0:
-                    page.locator(tmpl).first.click()
-                    return
-            except Exception:
-                continue
 
 
 def _go_next_page(page) -> bool:
@@ -890,12 +901,13 @@ def _go_next_page(page) -> bool:
         'a[aria-label="Next page"]', 'a[aria-label="Ďalej"]',
         'a:text-is("Ďalej")', 'a:text-is("»")', 'a:text-is(">")',
         ".pagination .next a", ".pagination li.next a", "[rel='next']",
-        "a.page-next", ".next-page", 'button:text-is("Ďalej")',
-        'button[aria-label="Next"]',
+        "a.page-next", ".next-page",
+        'button:text-is("Ďalej")', 'button[aria-label="Next"]',
+        'button:text-is(">")', 'button:text-is("»")',
     ]:
         try:
             btn = page.locator(sel)
-            if btn.count() > 0 and btn.first.is_enabled():
+            if btn.count() > 0 and btn.first.is_enabled() and btn.first.is_visible():
                 btn.first.click()
                 page.wait_for_load_state("domcontentloaded", timeout=10000)
                 return True
@@ -908,7 +920,7 @@ def _deduplicate(docs: list[Dokument]) -> list[Dokument]:
     seen: set[str] = set()
     result: list[Dokument] = []
     for doc in docs:
-        key = doc.url or f"{doc.typ}|{doc.cislo}|{doc.nazov}|{doc.dodavatel}"
+        key = doc.url or f"{doc.typ}|{doc.cislo}|{doc.nazov}|{doc.dodavatel}|{doc.rok}"
         if key not in seen:
             seen.add(key)
             result.append(doc)
@@ -919,7 +931,12 @@ def _deduplicate(docs: list[Dokument]) -> list[Dokument]:
 # Zobrazenie výsledkov
 # ---------------------------------------------------------------------------
 
-DOC_TYPE_SK = {"zmluvy": "Zmluvy", "faktury": "Faktúry", "objednavky": "Objednávky"}
+DOC_TYPE_LABEL: dict[str, str] = {
+    "zmluvy": "Zmluvy",
+    "faktury": "Fakt. dod.",
+    "faktury-odberatelske": "Fakt. odb.",
+    "objednavky": "Objednávky",
+}
 
 
 def display_results(docs: list[Dokument], output_format: str = "table") -> None:
@@ -931,94 +948,96 @@ def display_results(docs: list[Dokument], output_format: str = "table") -> None:
         def to_dict(d: Dokument) -> dict:
             r = asdict(d)
             r.pop("raw", None)
-            return {k: v for k, v in r.items() if v or isinstance(v, list) and v}
+            return {k: v for k, v in r.items() if v or (isinstance(v, list) and v)}
         print(json.dumps([to_dict(d) for d in docs], ensure_ascii=False, indent=2))
         return
 
     if output_format == "csv":
         import csv, io
         fields = [
-            "organizacia", "typ", "cislo", "nazov", "dodavatel", "ico", "dic",
+            "organizacia", "rok", "typ", "cislo", "nazov",
+            "dodavatel", "ico", "dic", "adresa_dodavatela",
             "suma", "suma_bez_dph", "mena",
             "datum", "datum_ucinnosti", "datum_zverejnenia", "datum_platnosti_do",
-            "kategoria", "oddelenie", "stav", "rok",
-            "objednavatel", "adresa_dodavatela", "popis", "poznamka", "url",
+            "kategoria", "oddelenie", "stav",
+            "objednavatel", "popis", "poznamka", "url",
         ]
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for d in docs:
             row = asdict(d)
+            row.pop("raw", None)
             row["subory"] = " | ".join(row.get("subory", []))
             writer.writerow(row)
         print(buf.getvalue())
         return
 
     # Tabulkový formát
-    W_ORG = 20
-    W_TYP = 10
+    W_ORG = 18
+    W_ROK = 5
+    W_TYP = 11
     W_CISLO = 16
-    W_NAZOV = 36
-    W_DODAVATEL = 26
-    W_ICO = 12
-    W_DATUM = 12
-    W_SUMA = 15
-    total_w = W_ORG + W_TYP + W_CISLO + W_NAZOV + W_DODAVATEL + W_ICO + W_DATUM + W_SUMA + 7
+    W_NAZOV = 34
+    W_DODAVATEL = 24
+    W_ICO = 11
+    W_DATUM = 11
+    W_SUMA = 14
+    total_w = W_ORG + W_ROK + W_TYP + W_CISLO + W_NAZOV + W_DODAVATEL + W_ICO + W_DATUM + W_SUMA + 8
 
     print(f"\n{'='*total_w}")
-    print(f"  Nájdených: {len(docs)} dokumentov – Spišská Nová Ves a organizácie")
+    print(f"  Nájdených: {len(docs)} dokumentov – Spišská Nová Ves")
     print(f"{'='*total_w}")
-    print(
-        f"{'Organizácia':<{W_ORG}} {'Typ':<{W_TYP}} {'Číslo':<{W_CISLO}} "
+    hdr = (
+        f"{'Organizácia':<{W_ORG}} {'Rok':<{W_ROK}} {'Typ':<{W_TYP}} {'Číslo':<{W_CISLO}} "
         f"{'Názov':<{W_NAZOV}} {'Dodávateľ':<{W_DODAVATEL}} "
         f"{'IČO':<{W_ICO}} {'Dátum':<{W_DATUM}} {'Suma':<{W_SUMA}}"
     )
+    print(hdr)
     print("-" * total_w)
 
     by_org: dict[str, list[Dokument]] = {}
     for d in docs:
-        by_org.setdefault(d.organizacia or d.org_slug, []).append(d)
+        by_org.setdefault(d.organizacia or d.org_id, []).append(d)
+
+    indent = " " * (W_ORG + W_ROK + W_TYP + 3)
 
     for org_name, org_docs in by_org.items():
-        print(f"\n  === {org_name} ({len(org_docs)} dok.) ===")
-        by_type: dict[str, list[Dokument]] = {}
+        print(f"\n  === {org_name} ({len(org_docs)}) ===")
         for d in org_docs:
-            by_type.setdefault(d.typ, []).append(d)
-
-        for dtype, type_docs in by_type.items():
-            type_label = DOC_TYPE_SK.get(dtype, dtype)
-            if len(by_type) > 1:
-                print(f"  --- {type_label} ({len(type_docs)}) ---")
-            for d in type_docs:
-                org_short = (d.organizacia[:W_ORG-2] + "..") if len(d.organizacia) > W_ORG else d.organizacia
-                cislo = (d.cislo[:W_CISLO-2] + "..") if len(d.cislo) > W_CISLO else d.cislo
-                nazov = (d.nazov[:W_NAZOV-2] + "..") if len(d.nazov) > W_NAZOV else d.nazov
-                dodavatel = (d.dodavatel[:W_DODAVATEL-2] + "..") if len(d.dodavatel) > W_DODAVATEL else d.dodavatel
-                print(
-                    f"{org_short:<{W_ORG}} {type_label:<{W_TYP}} {cislo:<{W_CISLO}} "
-                    f"{nazov:<{W_NAZOV}} {dodavatel:<{W_DODAVATEL}} "
-                    f"{d.ico:<{W_ICO}} {d.datum:<{W_DATUM}} {d.suma:<{W_SUMA}}"
-                )
-                extra = []
-                if d.datum_ucinnosti:
-                    extra.append(f"Účinnosť: {d.datum_ucinnosti}")
-                if d.datum_zverejnenia:
-                    extra.append(f"Zverejnené: {d.datum_zverejnenia}")
-                if d.kategoria:
-                    extra.append(f"Kat: {d.kategoria}")
-                if d.oddelenie:
-                    extra.append(f"Odd: {d.oddelenie}")
-                if d.stav:
-                    extra.append(f"Stav: {d.stav}")
-                if d.suma_bez_dph:
-                    extra.append(f"Bez DPH: {d.suma_bez_dph}")
-                if extra:
-                    indent = " " * (W_ORG + W_TYP + 2)
-                    print(f"{indent}{' | '.join(extra)}")
-                if d.url:
-                    print(f"{' ' * (W_ORG + W_TYP + 2)}URL: {d.url}")
-                for f in d.subory:
-                    print(f"{' ' * (W_ORG + W_TYP + 2)}PDF: {f}")
+            org_s = (d.organizacia[:W_ORG-2] + "..") if len(d.organizacia) > W_ORG else d.organizacia
+            typ_s = DOC_TYPE_LABEL.get(d.typ, d.typ)[:W_TYP]
+            cislo_s = (d.cislo[:W_CISLO-2] + "..") if len(d.cislo) > W_CISLO else d.cislo
+            nazov_s = (d.nazov[:W_NAZOV-2] + "..") if len(d.nazov) > W_NAZOV else d.nazov
+            dod_s = (d.dodavatel[:W_DODAVATEL-2] + "..") if len(d.dodavatel) > W_DODAVATEL else d.dodavatel
+            print(
+                f"{org_s:<{W_ORG}} {d.rok:<{W_ROK}} {typ_s:<{W_TYP}} {cislo_s:<{W_CISLO}} "
+                f"{nazov_s:<{W_NAZOV}} {dod_s:<{W_DODAVATEL}} "
+                f"{d.ico:<{W_ICO}} {d.datum:<{W_DATUM}} {d.suma:<{W_SUMA}}"
+            )
+            extra = []
+            if d.datum_ucinnosti:
+                extra.append(f"Účinnosť: {d.datum_ucinnosti}")
+            if d.datum_zverejnenia:
+                extra.append(f"Zverejnené: {d.datum_zverejnenia}")
+            if d.datum_platnosti_do:
+                extra.append(f"Platí do: {d.datum_platnosti_do}")
+            if d.kategoria:
+                extra.append(f"Kat: {d.kategoria}")
+            if d.oddelenie:
+                extra.append(f"Odd: {d.oddelenie}")
+            if d.stav:
+                extra.append(f"Stav: {d.stav}")
+            if d.suma_bez_dph:
+                extra.append(f"Bez DPH: {d.suma_bez_dph}")
+            if d.dic:
+                extra.append(f"DIČ: {d.dic}")
+            if extra:
+                print(f"{indent}{' | '.join(extra)}")
+            if d.url:
+                print(f"{indent}URL: {d.url}")
+            for f in d.subory:
+                print(f"{indent}PDF: {f}")
 
     print(f"\n{'='*total_w}\n")
 
@@ -1030,40 +1049,47 @@ def display_results(docs: list[Dokument], output_format: str = "table") -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="digitalnemesto_scraper",
-        description="Scraper pre digitalnemesto.sk – Spišská Nová Ves a organizácie",
+        description=(
+            "Scraper pre digitalnemesto.sk – Spišská Nová Ves a organizácie\n"
+            f"URL: /#/zverejnovanie/{SNV_CITY_SLUG}/{{org-id}}/{{typ}}/{{rok}}"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Príkladné príkazy:
-  python digitalnemesto_scraper.py                          # všetky org SNV, všetky typy
-  python digitalnemesto_scraper.py --org mesto              # iba Mesto SNV
-  python digitalnemesto_scraper.py --org ts                 # iba Technické služby
-  python digitalnemesto_scraper.py --keyword stavba         # filter kľúčovým slovom
-  python digitalnemesto_scraper.py --typ zmluvy             # iba zmluvy
-  python digitalnemesto_scraper.py --format json            # JSON výstup
-  python digitalnemesto_scraper.py --format csv > data.csv  # CSV export
-  python digitalnemesto_scraper.py --zoznam-org             # vypíše organizácie SNV
-  python digitalnemesto_scraper.py --bez-detailov           # rýchlejšie, menej údajov
+  python digitalnemesto_scraper.py                           # všetky org, typy, roky
+  python digitalnemesto_scraper.py --org mesto               # iba Mesto SNV
+  python digitalnemesto_scraper.py --org ts                  # Technické služby
+  python digitalnemesto_scraper.py --rok {CURRENT_YEAR}                # iba tento rok
+  python digitalnemesto_scraper.py --typ zmluvy --rok {CURRENT_YEAR}   # zmluvy {CURRENT_YEAR}
+  python digitalnemesto_scraper.py --keyword stavba          # filter kľúčovým slovom
+  python digitalnemesto_scraper.py --format json             # JSON so všetkými poliami
+  python digitalnemesto_scraper.py --format csv > data.csv   # CSV export
+  python digitalnemesto_scraper.py --zoznam-org              # vypíše org SNV
+  python digitalnemesto_scraper.py --bez-detailov            # rýchlejšie, menej polí
         """,
     )
     parser.add_argument(
         "--org", "-o",
-        help=(
-            "Slug alebo skratka organizácie (napr. mesto, ts, mks). "
-            "Bez tohto parametra sa scrapujú VŠETKY organizácie SNV."
-        ),
+        help="Slug alebo skratka organizácie (mesto, ts, mks, ...). Bez tohto parametra = všetky org SNV.",
     )
     parser.add_argument("--keyword", "-k", help="Kľúčové slovo pre filter výsledkov")
     parser.add_argument(
         "--typ", "-t",
-        choices=["zmluvy", "faktury", "objednavky", "all"],
+        choices=["zmluvy", "faktury", "faktury-odberatelske", "objednavky", "all"],
         default="all",
         metavar="TYP",
-        help="Typ dokumentov: zmluvy | faktury | objednavky | all (default: all)",
+        help="Typ: zmluvy | faktury | faktury-odberatelske | objednavky | all (default: all)",
+    )
+    parser.add_argument(
+        "--rok", "-r",
+        type=int,
+        metavar="ROK",
+        help=f"Rok dokumentov (napr. {CURRENT_YEAR}). Bez parametra = posledné 3 roky + aktuálny.",
     )
     parser.add_argument(
         "--stranky", "-s",
         type=int, default=10, metavar="N",
-        help="Max počet stránok na typ/org (default: 10)",
+        help="Max počet stránok na typ/org/rok (default: 10)",
     )
     parser.add_argument(
         "--format", "-f",
@@ -1079,26 +1105,26 @@ Príkladné príkazy:
     parser.add_argument(
         "--visible",
         action="store_true",
-        help="Zobrazí okno prehliadača (pre debugging)",
+        help="Zobrazí okno prehliadača – desktop viewport (vždy ≥1440px pre search pole)",
     )
     parser.add_argument(
         "--bez-detailov",
         action="store_true",
-        help="Preskočí načítanie detail stránok (rýchlejšie, menej údajov)",
+        help="Preskočí detail stránky – rýchlejšie, ale menej polí (IČO, PDF...)",
     )
 
     args = parser.parse_args()
 
     if args.zoznam_org:
-        print("\nOrganizácie Spišskej Novej Vsi na digitalnemesto.sk:")
-        print(f"  {'Slug / skratka':<45} Názov")
-        print("-" * 70)
-        for slug, name in SNV_ORGANIZACIE.items():
-            skratka = next((k for k, v in ORG_SKRATKY.items() if v == slug), "")
-            display = f"{slug}" + (f" (--org {skratka})" if skratka else "")
-            print(f"  {display:<45} {name}")
-        print("\nTip: Ak vaša organizácia nie je v zozname, zadajte jej slug priamo.")
-        print("     Napr. --org spiska-nova-ves-ts")
+        print(f"\nOrganizácie Spišskej Novej Vsi na digitalnemesto.sk")
+        print(f"URL pattern: {BASE_URL}/#/zverejnovanie/{SNV_CITY_SLUG}/{{org-id}}/{{typ}}/{{rok}}")
+        print(f"\n  {'Skratka':<12} {'org-id':<35} Názov")
+        print("-" * 75)
+        for org_id, name in SNV_ORGANIZACIE.items():
+            skratka = next((k for k, v in ORG_SKRATKY.items() if v == org_id), "")
+            print(f"  {skratka:<12} {org_id:<35} {name}")
+        print("\nTip: Ak org nie je v zozname, zadaj org-id priamo: --org <org-id>")
+        print(f"     Napr. --org tsspiskanovaves\n")
         return
 
     headless = not args.visible
@@ -1106,35 +1132,33 @@ Príkladné príkazy:
     keyword = args.keyword or ""
     doc_type = args.typ
 
-    if args.org:
-        # Preložíme skratku na slug ak treba
-        org_slug = ORG_SKRATKY.get(args.org, args.org)
-        # Ak to ešte nie je plný slug SNV, pridaj prefix
-        if not org_slug.startswith("spiska-nova-ves") and org_slug not in SNV_ORGANIZACIE:
-            org_slug = f"spiska-nova-ves-{org_slug}"
-        org_nazov = SNV_ORGANIZACIE.get(org_slug, org_slug)
+    years = get_years(args.rok)
+    print(
+        f"[→] SNV | org: {args.org or 'všetky'} | typ: {doc_type} "
+        f"| rok: {args.rok or years} | keyword: '{keyword}'",
+        file=sys.stderr,
+    )
 
-        print(
-            f"[→] Organizácia: {org_nazov} | keyword: '{keyword}' | typ: {doc_type}",
-            file=sys.stderr,
-        )
+    if args.org:
+        org_id = ORG_SKRATKY.get(args.org, args.org)
+        if not any(org_id.startswith(p) for p in ["spisk", "mu", "ts", "mks", "mkc", "kni", "bh", "soc"]):
+            pass  # nechaj ako je – môže byť ľubovoľný slug
+        org_nazov = SNV_ORGANIZACIE.get(org_id, org_id)
         docs = scrape_organizacia(
-            org_slug=org_slug,
+            org_id=org_id,
             org_nazov=org_nazov,
             keyword=keyword,
             doc_type=doc_type,
+            rok_arg=args.rok,
             max_pages=args.stranky,
             headless=headless,
             scrape_details=scrape_details,
         )
     else:
-        print(
-            f"[→] Všetky organizácie SNV | keyword: '{keyword}' | typ: {doc_type}",
-            file=sys.stderr,
-        )
         docs = scrape_vsetky_organizacie(
             keyword=keyword,
             doc_type=doc_type,
+            rok_arg=args.rok,
             max_pages=args.stranky,
             headless=headless,
             scrape_details=scrape_details,

@@ -3,6 +3,21 @@
 Scraper pre portál [digitalnemesto.sk](https://www.digitalnemesto.sk) zameraný na **Spišskú Novú Ves a jej organizácie**.
 Zbiera všetky dostupné údaje o zmluvách, faktúrach a objednávkach.
 
+## Štruktúra URL portálu
+
+Portál je SPA s hash routingom:
+```
+https://www.digitalnemesto.sk/#/zverejnovanie/{city-slug}/{org-id}/{typ}/{rok}
+```
+
+Príklad:
+```
+https://www.digitalnemesto.sk/#/zverejnovanie/spisska-nova-ves/spisskanovaves/faktury-dodavatelske/2025
+```
+
+> **Poznámka:** Vyhľadávacie pole je viditeľné **iba na PC verzii** (desktop viewport ≥1024px).
+> Scraper preto vždy používa viewport 1440×900, nie mobilný.
+
 ## Inštalácia
 
 ```bash
@@ -12,83 +27,81 @@ playwright install chromium
 
 ## Použitie
 
-### Základné príkazy
-
 ```bash
-# Všetky organizácie SNV, všetky typy dokumentov
+# Všetky organizácie SNV, všetky typy, posledné 3 roky
 python digitalnemesto_scraper.py
 
-# Iba mestský úrad SNV
-python digitalnemesto_scraper.py --org mesto
+# Iba Mesto SNV, aktuálny rok
+python digitalnemesto_scraper.py --org mesto --rok 2025
 
-# Iba Technické služby
-python digitalnemesto_scraper.py --org ts
+# Technické služby, zmluvy 2024
+python digitalnemesto_scraper.py --org ts --typ zmluvy --rok 2024
 
-# Filter podľa kľúčového slova
+# Filter kľúčovým slovom
 python digitalnemesto_scraper.py --keyword stavba
 
-# Iba zmluvy, JSON výstup
-python digitalnemesto_scraper.py --typ zmluvy --format json
+# JSON výstup so všetkými poliami
+python digitalnemesto_scraper.py --format json
 
-# CSV export všetkých faktúr
-python digitalnemesto_scraper.py --typ faktury --format csv > faktury_snv.csv
-
-# Zoznam organizácií SNV na portáli
-python digitalnemesto_scraper.py --zoznam-org
+# CSV export faktúr za 2025
+python digitalnemesto_scraper.py --typ faktury --rok 2025 --format csv > faktury_2025.csv
 
 # Rýchlejšie (bez návštevy detail stránok)
 python digitalnemesto_scraper.py --bez-detailov
 
 # Viditeľný prehliadač (debugging)
 python digitalnemesto_scraper.py --org mesto --visible
+
+# Zoznam organizácií SNV
+python digitalnemesto_scraper.py --zoznam-org
 ```
 
 ## Parametre
 
 | Parameter | Skratka | Popis | Default |
 |-----------|---------|-------|---------|
-| `--org` | `-o` | Slug alebo skratka organizácie SNV | _(všetky org SNV)_ |
+| `--org` | `-o` | Skratka alebo org-id organizácie | _(všetky org SNV)_ |
 | `--keyword` | `-k` | Kľúčové slovo pre filter | _(žiadny)_ |
-| `--typ` | `-t` | `zmluvy` / `faktury` / `objednavky` / `all` | `all` |
-| `--stranky` | `-s` | Max počet stránok na typ/org | `10` |
+| `--typ` | `-t` | `zmluvy` / `faktury` / `faktury-odberatelske` / `objednavky` / `all` | `all` |
+| `--rok` | `-r` | Rok dokumentov (napr. 2025) | _(posledné 3 roky)_ |
+| `--stranky` | `-s` | Max počet stránok na typ/org/rok | `10` |
 | `--format` | `-f` | `table` / `json` / `csv` | `table` |
 | `--zoznam-org` | | Vypíš organizácie SNV | |
-| `--visible` | | Zobraz okno prehliadača | _(headless)_ |
-| `--bez-detailov` | | Preskočí detail stránky (rýchlejšie) | |
+| `--visible` | | Zobraz okno prehliadača (desktop viewport) | |
+| `--bez-detailov` | | Preskočí detail stránky – rýchlejšie, menej polí | |
 
 ## Organizácie SNV
 
-Spravuj zoznam v `SNV_ORGANIZACIE` v skripte. Skratky pre `--org`:
+| Skratka | org-id | Názov |
+|---------|--------|-------|
+| `mesto` | `spisskanovaves` | Mesto Spišská Nová Ves |
+| `mu` | `muspiskanovaves` | Mestský úrad SNV |
+| `ts` | `tsspiskanovaves` | Technické služby SNV |
+| `mks` | `mksspiskanovaves` | Mestské kultúrne stredisko |
+| `mkc` | `mksspn` | Mestské kultúrne centrum |
+| `kniznica` | `kniznicaspiskanovaves` | Mestská knižnica |
+| `bh` | `bhspiskanovaves` | Bytové hospodárstvo |
+| `socialne` | `socialnecentrumspn` | Sociálne centrum |
 
-| Skratka | Slug | Organizácia |
-|---------|------|-------------|
-| `mesto` | `spiska-nova-ves` | Mesto Spišská Nová Ves |
-| `mu` | `spiska-nova-ves-mestsky-urad` | Mestský úrad SNV |
-| `ts` | `spiska-nova-ves-ts` | Technické služby |
-| `mks` | `spiska-nova-ves-mks` | Mestské kultúrne stredisko |
-| `mkc` | `spiska-nova-ves-mkc` | Mestské kultúrne centrum |
-| `kniznica` | `spiska-nova-ves-kniznica` | Mestská knižnica |
-| `bh` | `spiska-nova-ves-bh` | Bytové hospodárstvo |
-
-Neznámy slug zadaj priamo: `--org spiska-nova-ves-nova-org`
+> Ak org nie je v zozname, zadaj org-id priamo: `--org <org-id>`
+> Napr. `--org tsspiskanovaves`
 
 ## Zbierané dáta
-
-Scraper získava **všetky dostupné polia** z každého dokumentu:
 
 | Pole | Popis |
 |------|-------|
 | `organizacia` | Názov SNV organizácie |
-| `typ` | zmluvy / faktury / objednavky |
-| `cislo` | Číslo zmluvy / faktúry / objednávky |
-| `nazov` | Predmet / názov dokumentu |
-| `dodavatel` | Názov dodávateľa / zhotoviteľa |
+| `rok` | Rok dokumentu |
+| `typ` | zmluvy / faktury / faktury-odberatelske / objednavky |
+| `cislo` | Číslo dokumentu |
+| `nazov` | Predmet / názov |
+| `dodavatel` | Dodávateľ / zhotoviteľ |
 | `ico` | IČO dodávateľa |
 | `dic` | DIČ dodávateľa |
 | `adresa_dodavatela` | Adresa dodávateľa |
 | `objednavatel` | Objednávateľ / odberateľ |
-| `oddelenie` | Oddelenie / referát mestského úradu |
-| `suma` | Celková suma vrátane DPH |
+| `oddelenie` | Oddelenie / referát |
+| `suma` | Celková suma s DPH |
 | `suma_bez_dph` | Suma bez DPH |
 | `mena` | Mena (EUR) |
 | `datum` | Dátum podpisu / vystavenia |
@@ -96,17 +109,16 @@ Scraper získava **všetky dostupné polia** z každého dokumentu:
 | `datum_zverejnenia` | Dátum zverejnenia na portáli |
 | `datum_platnosti_do` | Platnosť do |
 | `kategoria` | Kategória dokumentu |
-| `oddelenie` | Oddelenie / útvar |
-| `rok` | Rok dokumentu |
-| `stav` | Stav (aktívna, ukončená...) |
+| `stav` | Stav dokumentu |
 | `url` | URL detail stránky |
 | `subory` | Linky na PDF prílohy |
-| `poznamka` | Poznámka / doplňujúce info |
+| `poznamka` | Poznámka |
 
 ## Poznámky
 
-- Web používa ochranu pred botmi – scraper používa headless Chromium s realistickými hlavičkami.
-- Ak headless nefunguje, použite `--visible`.
-- Scraper zachytáva aj API volania (JSON) – ak portál používa REST API, dáta sa načítajú priamo bez DOM parsingu.
-- `--bez-detailov` preskočí návštevu detail stránok a je výrazne rýchlejší, ale niektoré polia (IČO, dátumy, PDF) môžu chýbať.
-- Slugy organizácií je možné doplniť priamo do `SNV_ORGANIZACIE` v skripte.
+- Portál blokuje boty – scraper používa headless Chromium s realistickými hlavičkami.
+- **Search pole** je dostupné iba na PC viewporte (≥1024px) – scraper vždy používa 1440×900.
+- Scraper zachytáva JSON API odpovede (portál je SPA) – ak API funguje, DOM parsing sa preskočí.
+- `--bez-detailov` je výrazne rýchlejšie, ale niektoré polia (IČO, PDF prílohy, dátumy) môžu chýbať.
+- **Org-id** v URL je zvyčajne názov organizácie bez diakritiky a medzier (napr. `tsspiskanovaves`).
+  Správne org-id nájdeš v URL prehliadača pri prezeraní stránky organizácie.
