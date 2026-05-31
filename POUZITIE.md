@@ -1,80 +1,112 @@
-# Digitalnemesto.sk Scraper
+# Digitalnemesto.sk Scraper – Spišská Nová Ves
 
-Scraper pre portál [digitalnemesto.sk](https://www.digitalnemesto.sk) – zverejňovanie zmlúv, faktúr a objednávok slovenských samospráv.
+Scraper pre portál [digitalnemesto.sk](https://www.digitalnemesto.sk) zameraný na **Spišskú Novú Ves a jej organizácie**.
+Zbiera všetky dostupné údaje o zmluvách, faktúrach a objednávkach.
 
 ## Inštalácia
 
 ```bash
-cd scraper
 pip install -r requirements.txt
 playwright install chromium
 ```
 
 ## Použitie
 
-### Základné vyhľadávanie
+### Základné príkazy
 
 ```bash
-# Vyhľadaj zmluvy v Prešove obsahujúce slovo 'stavba'
-python digitalnemesto_scraper.py --city presov --keyword stavba
+# Všetky organizácie SNV, všetky typy dokumentov
+python digitalnemesto_scraper.py
 
-# Vyhľadaj IT zmluvy v Bratislave
-python digitalnemesto_scraper.py --city bratislava --keyword "IT služby" --typ zmluvy
+# Iba mestský úrad SNV
+python digitalnemesto_scraper.py --org mesto
 
-# Všetky faktúry v Košiciach
-python digitalnemesto_scraper.py --city kosice --typ faktury
+# Iba Technické služby
+python digitalnemesto_scraper.py --org ts
 
-# Výstup v JSON formáte
-python digitalnemesto_scraper.py --city nitra --keyword servis --format json
+# Filter podľa kľúčového slova
+python digitalnemesto_scraper.py --keyword stavba
 
-# CSV export
-python digitalnemesto_scraper.py --city zilina --typ objednavky --format csv > vystup.csv
-```
+# Iba zmluvy, JSON výstup
+python digitalnemesto_scraper.py --typ zmluvy --format json
 
-### Ďalšie možnosti
+# CSV export všetkých faktúr
+python digitalnemesto_scraper.py --typ faktury --format csv > faktury_snv.csv
 
-```bash
-# Zoznam dostupných miest
-python digitalnemesto_scraper.py --zoznam-miest
+# Zoznam organizácií SNV na portáli
+python digitalnemesto_scraper.py --zoznam-org
 
-# Viditeľný prehliadač (pre debugging / ak nefunguje headless)
-python digitalnemesto_scraper.py --city presov --keyword audit --visible
+# Rýchlejšie (bez návštevy detail stránok)
+python digitalnemesto_scraper.py --bez-detailov
 
-# Max 3 stránky výsledkov
-python digitalnemesto_scraper.py --city bratislava --keyword stavba --stranky 3
+# Viditeľný prehliadač (debugging)
+python digitalnemesto_scraper.py --org mesto --visible
 ```
 
 ## Parametre
 
 | Parameter | Skratka | Popis | Default |
 |-----------|---------|-------|---------|
-| `--city` | `-c` | Slug alebo názov mesta | povinný |
+| `--org` | `-o` | Slug alebo skratka organizácie SNV | _(všetky org SNV)_ |
 | `--keyword` | `-k` | Kľúčové slovo pre filter | _(žiadny)_ |
 | `--typ` | `-t` | `zmluvy` / `faktury` / `objednavky` / `all` | `all` |
-| `--stranky` | `-s` | Max počet stránok | `10` |
+| `--stranky` | `-s` | Max počet stránok na typ/org | `10` |
 | `--format` | `-f` | `table` / `json` / `csv` | `table` |
+| `--zoznam-org` | | Vypíš organizácie SNV | |
 | `--visible` | | Zobraz okno prehliadača | _(headless)_ |
-| `--zoznam-miest` | | Vypíš dostupné mestá | |
+| `--bez-detailov` | | Preskočí detail stránky (rýchlejšie) | |
 
-## Výstup (table formát)
+## Organizácie SNV
 
-```
-==============================================================================
-  Nájdených: 12 dokumentov
-==============================================================================
-Typ          Názov                                         Dodávateľ                       Dátum        Suma
-------------------------------------------------------------------------------
-  --- Zmluvy (8) ---
-Zmluvy       Zmluva o dielo - Rekonštrukcia chodníka...   ABC Stavby s.r.o.               2024-03-15   45 000,00 €
-             https://www.digitalnemesto.sk/mesto/presov/...
-...
-```
+Spravuj zoznam v `SNV_ORGANIZACIE` v skripte. Skratky pre `--org`:
+
+| Skratka | Slug | Organizácia |
+|---------|------|-------------|
+| `mesto` | `spiska-nova-ves` | Mesto Spišská Nová Ves |
+| `mu` | `spiska-nova-ves-mestsky-urad` | Mestský úrad SNV |
+| `ts` | `spiska-nova-ves-ts` | Technické služby |
+| `mks` | `spiska-nova-ves-mks` | Mestské kultúrne stredisko |
+| `mkc` | `spiska-nova-ves-mkc` | Mestské kultúrne centrum |
+| `kniznica` | `spiska-nova-ves-kniznica` | Mestská knižnica |
+| `bh` | `spiska-nova-ves-bh` | Bytové hospodárstvo |
+
+Neznámy slug zadaj priamo: `--org spiska-nova-ves-nova-org`
+
+## Zbierané dáta
+
+Scraper získava **všetky dostupné polia** z každého dokumentu:
+
+| Pole | Popis |
+|------|-------|
+| `organizacia` | Názov SNV organizácie |
+| `typ` | zmluvy / faktury / objednavky |
+| `cislo` | Číslo zmluvy / faktúry / objednávky |
+| `nazov` | Predmet / názov dokumentu |
+| `dodavatel` | Názov dodávateľa / zhotoviteľa |
+| `ico` | IČO dodávateľa |
+| `dic` | DIČ dodávateľa |
+| `adresa_dodavatela` | Adresa dodávateľa |
+| `objednavatel` | Objednávateľ / odberateľ |
+| `oddelenie` | Oddelenie / referát mestského úradu |
+| `suma` | Celková suma vrátane DPH |
+| `suma_bez_dph` | Suma bez DPH |
+| `mena` | Mena (EUR) |
+| `datum` | Dátum podpisu / vystavenia |
+| `datum_ucinnosti` | Dátum účinnosti / splatnosti |
+| `datum_zverejnenia` | Dátum zverejnenia na portáli |
+| `datum_platnosti_do` | Platnosť do |
+| `kategoria` | Kategória dokumentu |
+| `oddelenie` | Oddelenie / útvar |
+| `rok` | Rok dokumentu |
+| `stav` | Stav (aktívna, ukončená...) |
+| `url` | URL detail stránky |
+| `subory` | Linky na PDF prílohy |
+| `poznamka` | Poznámka / doplňujúce info |
 
 ## Poznámky
 
-- Web používa ochranu pred botmi (Cloudflare) – scraper používa headless Chromium.
-- Ak headless nefunguje, skúste `--visible` pre overenie v reálnom prehliadači.
-- Ak mesto nie je v zozname, odhadnite slug (diakritiku bez, medzery ako `-`):
-  - `Banská Bystrica` → `banska-bystrica`
-  - `Stará Ľubovňa` → `stara-lubovna`
-- Scraper filtruje výsledky klientsky ako fallback, ak serverové vyhľadávanie nefunguje.
+- Web používa ochranu pred botmi – scraper používa headless Chromium s realistickými hlavičkami.
+- Ak headless nefunguje, použite `--visible`.
+- Scraper zachytáva aj API volania (JSON) – ak portál používa REST API, dáta sa načítajú priamo bez DOM parsingu.
+- `--bez-detailov` preskočí návštevu detail stránok a je výrazne rýchlejší, ale niektoré polia (IČO, dátumy, PDF) môžu chýbať.
+- Slugy organizácií je možné doplniť priamo do `SNV_ORGANIZACIE` v skripte.
